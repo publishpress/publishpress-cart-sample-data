@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PublishPress Cart Sample Data
  * Description: Creates removable sample products, customers, orders, subscriptions, and reports for PublishPress Cart development and QA sites.
- * Version: 0.1.3
+ * Version: 0.1.6
  * Author: PublishPress
  * Author URI: https://publishpress.com/
  * License: GPL-2.0-or-later
@@ -26,7 +26,7 @@ final class PPCart_Sample_Data_Plugin
 
     public function register_page()
     {
-        add_management_page(__('Cart Sample Data', 'publishpress-cart-sample-data'), __('Cart Sample Data', 'publishpress-cart-sample-data'), 'manage_options', 'ppcart-sample-data', array($this, 'render'));
+        add_submenu_page('ppcart', __('Sample Data', 'publishpress-cart-sample-data'), __('Sample Data', 'publishpress-cart-sample-data'), 'manage_options', 'ppcart-sample-data', array($this, 'render'));
     }
 
     public function render()
@@ -60,9 +60,9 @@ final class PPCart_Sample_Data_Plugin
     {
         $products = array();
         foreach (array(array('Creator Course', 149), array('Monthly Membership', 29), array('Coaching Package', 499), array('Template Bundle', 39), array('Live Workshop', 79), array('Free Starter Guide', 0)) as $index => $data) {
-            $id = wp_insert_post(array('post_title' => $data[0] . ' (Sample)', 'post_type' => 'ppcart_product', 'post_status' => 'publish'), true);
+            $id = wp_insert_post(array('post_title' => $data[0], 'post_type' => 'ppcart_product', 'post_status' => 'publish'), true);
             if (is_wp_error($id)) { continue; }
-            $plan = array('option_id' => 'sample-' . $index, 'option_name' => $data[0], 'product_type' => $index === 1 ? 'recurring' : ($data[1] ? 'one-time' : 'free'), 'price' => (string) $data[1], 'interval' => 'month', 'frequency' => 1, 'installments' => 0);
+            $plan = array('option_id' => 'sample-' . $index, 'option_name' => $data[0], 'product_type' => $index === 1 ? 'recurring' : ($data[1] ? '' : 'free'), 'price' => (string) $data[1], 'interval' => 'month', 'frequency' => 1, 'installments' => 0);
             update_post_meta($id, '_ppcart_pay_options', array($plan)); update_post_meta($id, self::META_KEY, '1'); $products[] = array($id, $data[0], $data[1], $plan);
         }
         return $products;
@@ -71,15 +71,17 @@ final class PPCart_Sample_Data_Plugin
     private function order($product, $index, $timestamp)
     {
         $states = array('paid', 'paid', 'paid', 'refunded', 'failed', 'pending-payment'); $state = $states[$index % count($states)];
-        $id = wp_insert_post(array('post_title' => 'Sample Customer ' . ($index % 36 + 1), 'post_type' => 'ppcart_order', 'post_status' => 'ppcart_' . ($state === 'pending-payment' ? 'pending' : $state), 'post_date_gmt' => gmdate('Y-m-d H:i:s', $timestamp)), true);
+        $date = gmdate('Y-m-d H:i:s', $timestamp);
+        $id = wp_insert_post(array('post_title' => 'Alex Morgan', 'post_type' => 'ppcart_order', 'post_status' => 'ppcart_' . ($state === 'pending-payment' ? 'pending' : $state), 'post_date_gmt' => $date, 'post_date' => get_date_from_gmt($date)), true);
         if (is_wp_error($id)) { return; }
-        $meta = array('status' => $state, 'payment_status' => $state, 'product_id' => $product[0], 'product_name' => $product[1], 'amount' => $product[2], 'invoice_total' => $product[2], 'currency' => 'USD', 'customer_name' => 'Sample Customer ' . ($index % 36 + 1), 'email' => 'sample-' . ($index % 36 + 1) . '@example.test', 'plan' => $product[3], 'coupon_id' => $index % 10 === 0 ? 'SAMPLE10' : '');
+        $names = array(array('Alex','Morgan'), array('Olivia','Martin'), array('Noah','Williams'), array('Emma','Garcia'), array('Liam','Taylor'), array('Sophia','Brown')); $name = $names[$index % count($names)];
+        $meta = array('status' => $state, 'payment_status' => $state, 'product_id' => $product[0], 'product_name' => $product[1], 'amount' => $product[2], 'invoice_total' => $product[2], 'invoice_subtotal' => $product[2], 'currency' => 'USD', 'first_name' => $name[0], 'last_name' => $name[1], 'customer_name' => $name[0] . ' ' . $name[1], 'email' => strtolower($name[0] . '.' . $name[1] . ($index + 1) . '@example.test'), 'plan' => $product[3], 'coupon_id' => $index % 10 === 0 ? 'WELCOME10' : '');
         foreach ($meta as $key => $value) { if ('' !== $value) { update_post_meta($id, '_ppcart_' . $key, $value); } } update_post_meta($id, self::META_KEY, '1');
     }
 
     private function cart_is_available() { return post_type_exists('ppcart_product') && (defined('PPCART_VERSION') || defined('PPCART_PRO_VERSION')); }
     private function count_records() { $q = new WP_Query(array('post_type' => array('ppcart_product', 'ppcart_order', 'ppcart_subscription'), 'post_status' => 'any', 'posts_per_page' => 1, 'meta_key' => self::META_KEY, 'meta_value' => '1')); return (int) $q->found_posts; }
     private function authorize($action) { if (! current_user_can('manage_options')) { wp_die(esc_html__('You are not allowed to manage sample data.', 'publishpress-cart-sample-data')); } check_admin_referer($action); }
-    private function redirect() { wp_safe_redirect(admin_url('tools.php?page=ppcart-sample-data')); exit; }
+    private function redirect() { wp_safe_redirect(admin_url('admin.php?page=ppcart-sample-data')); exit; }
 }
 new PPCart_Sample_Data_Plugin();
