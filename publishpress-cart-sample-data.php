@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PublishPress Cart Sample Data
  * Description: Creates removable sample products, customers, orders, subscriptions, and reports for PublishPress Cart development and QA sites.
- * Version: 0.1.6
+ * Version: 0.2.0
  * Author: PublishPress
  * Author URI: https://publishpress.com/
  * License: GPL-2.0-or-later
@@ -43,16 +43,17 @@ final class PPCart_Sample_Data_Plugin
     {
         $this->authorize('ppcart_sample_data_generate');
         if (! $this->cart_is_available()) { wp_die(esc_html__('Activate PublishPress Cart or PublishPress Cart Pro first.', 'publishpress-cart-sample-data')); }
-        $products = $this->products(); $now = current_time('timestamp', true);
-        for ($i = 0; $i < 180; $i++) { $this->order($products[$i % count($products)], $i, $now - DAY_IN_SECONDS * (364 - (($i * 17) % 365))); }
-        do_action('ppcart_sample_data_generate_affiliate_payments');
+        $products = $this->products(); $now = current_time('timestamp', true); $orders = array();
+        for ($i = 0; $i < 180; $i++) { $orders[] = $this->order($products[$i % count($products)], $i, $now - DAY_IN_SECONDS * (364 - (($i * 17) % 365))); }
+        $this->subscriptions($orders); $this->pro_records($products, $orders);
+        do_action('ppcart_sample_data_generate_affiliate_payments', $orders);
         $this->redirect();
     }
 
     public function remove()
     {
         $this->authorize('ppcart_sample_data_remove');
-        foreach (get_posts(array('post_type' => array('ppcart_product', 'ppcart_order', 'ppcart_subscription'), 'post_status' => 'any', 'posts_per_page' => -1, 'fields' => 'ids', 'meta_key' => self::META_KEY, 'meta_value' => '1')) as $id) { wp_delete_post($id, true); }
+        foreach (get_posts(array('post_type' => array('ppcart_product', 'ppcart_order', 'ppcart_subscription', 'ppcart_global_coupon', 'ppcart_collection', 'ppcart_us_path', 'ppcart_upgrade_path'), 'post_status' => 'any', 'posts_per_page' => -1, 'fields' => 'ids', 'meta_key' => self::META_KEY, 'meta_value' => '1')) as $id) { wp_delete_post($id, true); }
         do_action('ppcart_sample_data_remove_affiliate_payments'); $this->redirect();
     }
 
@@ -64,6 +65,8 @@ final class PPCart_Sample_Data_Plugin
             if (is_wp_error($id)) { continue; }
             $plan = array('option_id' => 'sample-' . $index, 'option_name' => $data[0], 'product_type' => $index === 1 ? 'recurring' : ($data[1] ? '' : 'free'), 'price' => (string) $data[1], 'interval' => 'month', 'frequency' => 1, 'installments' => 0);
             update_post_meta($id, '_ppcart_pay_options', array($plan)); update_post_meta($id, self::META_KEY, '1'); $products[] = array($id, $data[0], $data[1], $plan);
+            wp_set_object_terms($id, $index % 2 ? 'Courses' : 'Digital Downloads', 'ppcart_product_cat', false);
+            wp_set_object_terms($id, $index % 2 ? 'membership' : 'templates', 'ppcart_product_tag', false);
         }
         return $products;
     }
@@ -73,10 +76,38 @@ final class PPCart_Sample_Data_Plugin
         $states = array('paid', 'paid', 'paid', 'refunded', 'failed', 'pending-payment'); $state = $states[$index % count($states)];
         $date = gmdate('Y-m-d H:i:s', $timestamp);
         $id = wp_insert_post(array('post_title' => 'Alex Morgan', 'post_type' => 'ppcart_order', 'post_status' => 'ppcart_' . ($state === 'pending-payment' ? 'pending' : $state), 'post_date_gmt' => $date, 'post_date' => get_date_from_gmt($date)), true);
-        if (is_wp_error($id)) { return; }
+        if (is_wp_error($id)) { return 0; }
         $names = array(array('Alex','Morgan'), array('Olivia','Martin'), array('Noah','Williams'), array('Emma','Garcia'), array('Liam','Taylor'), array('Sophia','Brown')); $name = $names[$index % count($names)];
         $meta = array('status' => $state, 'payment_status' => $state, 'product_id' => $product[0], 'product_name' => $product[1], 'amount' => $product[2], 'invoice_total' => $product[2], 'invoice_subtotal' => $product[2], 'currency' => 'USD', 'first_name' => $name[0], 'last_name' => $name[1], 'customer_name' => $name[0] . ' ' . $name[1], 'email' => strtolower($name[0] . '.' . $name[1] . ($index + 1) . '@example.test'), 'plan' => $product[3], 'coupon_id' => $index % 10 === 0 ? 'WELCOME10' : '');
-        foreach ($meta as $key => $value) { if ('' !== $value) { update_post_meta($id, '_ppcart_' . $key, $value); } } update_post_meta($id, self::META_KEY, '1');
+        foreach ($meta as $key => $value) { if ('' !== $value) { update_post_meta($id, '_ppcart_' . $key, $value); } } update_post_meta($id, self::META_KEY, '1'); return $id;
+    }
+
+    private function subscriptions($orders)
+    {
+        foreach (array_slice(array_filter($orders), 0, 36) as $index => $order_id) {
+            $status = array('active', 'paused', 'canceled', 'completed')[$index % 4];
+            $id = wp_insert_post(array('post_title' => get_the_title($order_id), 'post_type' => 'ppcart_subscription', 'post_status' => 'ppcart_' . $status), true);
+            if (is_wp_error($id)) { continue; }
+            foreach (array('customer_name','first_name','last_name','email','product_id','product_name','currency','amount') as $key) { $value = get_post_meta($order_id, '_ppcart_' . $key, true); if ('' !== $value) { update_post_meta($id, '_ppcart_' . $key, $value); } }
+            update_post_meta($id, '_ppcart_status', $status); update_post_meta($id, '_ppcart_sub_status', $status); update_post_meta($id, '_ppcart_first_order', $order_id); update_post_meta($id, self::META_KEY, '1');
+        }
+    }
+
+    private function pro_records($products, $orders)
+    {
+        if (! defined('PPCART_PRO_VERSION')) { return; }
+        $coupon = $this->pro_post('ppcart_global_coupon', 'WELCOME20'); if ($coupon) { update_post_meta($coupon, '_ppcart_global_coupon_percent', '20'); }
+        $collection = $this->pro_post('ppcart_collection', 'Creator Launch Bundle'); if ($collection) { update_post_meta($collection, '_ppcart_product_options', array($products[0][0], $products[3][0])); update_post_meta($collection, '_ppcart_pay_options', array($products[0][3])); }
+        $offer = $this->pro_post('ppcart_us_path', 'VIP Coaching Offer'); if ($offer) { update_post_meta($products[0][0], '_ppcart_upsell_path', $offer); }
+        $this->pro_post('ppcart_upgrade_path', 'Membership Upgrade');
+        do_action('ppcart_sample_data_generate_affiliates', $orders, $products);
+    }
+
+    private function pro_post($type, $title)
+    {
+        if (! post_type_exists($type)) { return 0; }
+        $id = wp_insert_post(array('post_title' => $title, 'post_type' => $type, 'post_status' => 'publish'), true);
+        if (is_wp_error($id)) { return 0; } update_post_meta($id, self::META_KEY, '1'); return $id;
     }
 
     private function cart_is_available() { return post_type_exists('ppcart_product') && (defined('PPCART_VERSION') || defined('PPCART_PRO_VERSION')); }
