@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PublishPress Cart Sample Data
  * Description: Creates removable demo products, orders, subscriptions, and catalog records for PublishPress Cart or Studiocart.
- * Version: 0.3.0
+ * Version: 0.3.1
  * Author: PublishPress
  * Author URI: https://publishpress.com/
  * License: GPL-2.0-or-later
@@ -59,7 +59,10 @@ final class PPCart_Sample_Data_Plugin
     public function remove()
     {
         $this->authorize('ppcart_sample_data_remove');
-        foreach (get_posts(array('post_type' => $this->record_types(), 'post_status' => 'any', 'posts_per_page' => -1, 'fields' => 'ids', 'meta_key' => self::META_KEY, 'meta_value' => '1')) as $id) { wp_delete_post($id, true); }
+        foreach (get_posts(array('post_type' => $this->record_types(), 'post_status' => 'any', 'posts_per_page' => -1, 'fields' => 'ids', 'meta_key' => self::META_KEY, 'meta_value' => '1')) as $id) {
+            if (get_post_type($id) === $this->type('order')) { $this->remove_download_access($id); }
+            wp_delete_post($id, true);
+        }
         if (! $this->is_studiocart()) { do_action('ppcart_sample_data_remove_affiliate_payments'); }
         $this->redirect();
     }
@@ -72,6 +75,7 @@ final class PPCart_Sample_Data_Plugin
             if (is_wp_error($id)) { continue; }
             $plan = array('option_id' => sanitize_title($data[0]) . '-standard', 'option_name' => $data[0], 'product_type' => $index === 1 ? 'recurring' : ($data[1] ? '' : 'free'), 'price' => (string) $data[1], 'interval' => 'month', 'frequency' => 1, 'installments' => 0);
             update_post_meta($id, $this->meta('pay_options'), array($plan)); update_post_meta($id, self::META_KEY, '1'); $products[] = array($id, $data[0], $data[1], $plan);
+            $this->product_download($id, $index);
             wp_set_object_terms($id, $index % 2 ? 'Courses' : 'Digital Downloads', $this->type('product_cat'), false);
             wp_set_object_terms($id, $index % 2 ? 'membership' : 'templates', $this->type('product_tag'), false);
         }
@@ -80,7 +84,7 @@ final class PPCart_Sample_Data_Plugin
 
     private function order($product, $index, $timestamp)
     {
-        $states = array('paid', 'paid', 'paid', 'refunded', 'failed', 'pending-payment'); $state = $product[3]['product_type'] === 'recurring' ? 'paid' : $states[$index % count($states)];
+        $states = array('paid', 'paid', 'paid', 'refunded', 'failed', 'pending-payment'); $state = $product[3]['product_type'] === 'recurring' ? 'paid' : $states[(int) floor($index / 6) % count($states)];
         $names = array(array('Alex','Morgan'), array('Olivia','Martin'), array('Noah','Williams'), array('Emma','Garcia'), array('Liam','Taylor'), array('Sophia','Brown')); $name = $names[$index % count($names)];
         $date = gmdate('Y-m-d H:i:s', $timestamp);
         $id = wp_insert_post(array('post_title' => $name[0] . ' ' . $name[1], 'post_type' => $this->type('order'), 'post_status' => $this->status($state), 'post_date_gmt' => $date, 'post_date' => get_date_from_gmt($date)), true);
@@ -90,7 +94,69 @@ final class PPCart_Sample_Data_Plugin
             $plan = (object) array('type' => $plan['product_type'] ?: 'one-time', 'name' => $plan['option_name'], 'option_id' => $plan['option_id'], 'price' => $plan['price'], 'initial_payment' => (float) $plan['price'], 'interval' => $plan['interval'], 'frequency' => $plan['frequency'], 'installments' => $plan['installments'], 'stripe_id' => '');
         }
         $meta = array('status' => $state, 'payment_status' => $state, 'product_id' => $product[0], 'product_name' => $product[1], 'item_name' => $product[1], 'option_id' => $product[3]['option_id'], 'amount' => $product[2], 'invoice_total' => $product[2], 'invoice_subtotal' => $product[2], 'main_offer_amt' => $product[2], 'currency' => 'USD', 'first_name' => $name[0], 'last_name' => $name[1], 'customer_name' => $name[0] . ' ' . $name[1], 'email' => strtolower($name[0] . '.' . $name[1] . ($index + 1) . '@example.test'), 'plan' => $plan, 'coupon_id' => ! $this->is_studiocart() && $index % 10 === 0 ? 'WELCOME10' : '');
-        foreach ($meta as $key => $value) { if ('' !== $value) { update_post_meta($id, $this->meta($key), $value); } } update_post_meta($id, self::META_KEY, '1'); return $id;
+        foreach ($meta as $key => $value) { if ('' !== $value) { update_post_meta($id, $this->meta($key), $value); } }
+        update_post_meta($id, self::META_KEY, '1');
+        if ($state === 'paid') { $this->attach_download_access($id, $product[0]); }
+        return $id;
+    }
+
+    private function product_download($product_id, $index)
+    {
+        $files = array(
+            0 => array('creator-workbook', 'Creator Course Workbook', 'creator-course-workbook.html'),
+            3 => array('content-calendar', 'Content Calendar', 'content-calendar.csv'),
+            4 => array('workshop-checklist', 'Live Workshop Checklist', 'live-workshop-checklist.txt'),
+            5 => array('starter-guide', 'Starter Guide', 'starter-guide.html'),
+        );
+        if (! isset($files[$index])) { return; }
+        $file = $files[$index];
+        update_post_meta($product_id, $this->meta('files'), array(array(
+            'file_id' => $file[0],
+            'file_name' => $file[1],
+            'file_url' => plugins_url('sample-data/downloads/' . $file[2], __FILE__),
+            'file_redirect' => '1',
+            'file_plan' => array(),
+            'file_limit' => '',
+        )));
+    }
+
+    private function download_table()
+    {
+        global $wpdb;
+        static $checked = false;
+        static $available = '';
+        if ($checked) { return $available; }
+        $checked = true;
+        $table = $this->is_studiocart() ? $wpdb->prefix . 'ncs_downloads' : (class_exists('PPCart_Files') && method_exists('PPCart_Files', 'live_table') ? PPCart_Files::live_table() : $wpdb->prefix . 'ppcart_downloads');
+        if (! $table) { return ''; }
+        $available = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $wpdb->esc_like($table))) === $table ? $table : '';
+        return $available;
+    }
+
+    private function attach_download_access($order_id, $product_id)
+    {
+        global $wpdb;
+        $table = $this->download_table();
+        $files = get_post_meta($product_id, $this->meta('files'), true);
+        if (! $table || ! is_array($files)) { return; }
+        foreach ($files as $file) {
+            $wpdb->insert($table, array(
+                'file_id' => $file['file_id'],
+                'order_id' => $order_id,
+                'order_key' => wp_generate_password(20, false, false),
+                'product_id' => $product_id,
+                'access_granted' => get_post($order_id)->post_date_gmt,
+                'download_expires' => null,
+                'downloads_remaining' => 'unlimited',
+            ), array('%s', '%d', '%s', '%d', '%s', '%s', '%s'));
+        }
+    }
+
+    private function remove_download_access($order_id)
+    {
+        global $wpdb;
+        $table = $this->download_table();
+        if ($table) { $wpdb->delete($table, array('order_id' => $order_id), array('%d')); }
     }
 
     private function subscriptions($orders, $recurring_product_id)
