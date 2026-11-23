@@ -2,7 +2,7 @@
 /**
  * Plugin Name: PublishPress Cart Sample Data
  * Description: Creates removable demo products, orders, subscriptions, and catalog records for PublishPress Cart or Studiocart.
- * Version: 0.3.1
+ * Version: 0.3.2
  * Author: PublishPress
  * Author URI: https://publishpress.com/
  * License: GPL-2.0-or-later
@@ -19,7 +19,8 @@ final class PPCart_Sample_Data_Plugin
 
     public function __construct()
     {
-        add_action('admin_menu', array($this, 'register_page'));
+        // Register after either cart has added its parent menu.
+        add_action('admin_menu', array($this, 'register_page'), 100);
         add_action('admin_post_ppcart_sample_data_generate', array($this, 'generate'));
         add_action('admin_post_ppcart_sample_data_remove', array($this, 'remove'));
     }
